@@ -5,7 +5,7 @@
 > [!Important]
 > Introduzca a continuación su nombre y apellidos:
 >
-> Fulano Mengano Zutano
+> Albert Calero
 
 ## Aviso Importante
 
@@ -199,6 +199,7 @@ Es responsabilidad del alumno comprobar que las distintas funciones realizan su 
 Para ello, se recomienda usar la canción [Komm, gib mir deine Hand](wav/komm.wav), suminstrada al efecto.
 De todos modos, recuerde que, aunque sea en alemán, se trata de los Beatles, así que procure no destrozar
 innecesariamente la canción.
+![Tests](foto.png)
 
 #### Código desarrollado
 
@@ -208,12 +209,118 @@ pantalla, debe hacerse en formato *markdown*).
 
 ##### Código de `estereo2mono()`
 
+def estereo2mono(ficEste, ficMono, canal=2):
+    """
+    Lee el fichero estéreo 'ficEste' (16 bits) y genera el fichero monofónico 'ficMono'.
+    
+    Opciones de 'canal':
+        0: Canal izquierdo (L)
+        1: Canal derecho (R)
+        2: Semisuma (L + R) / 2  [Opción por defecto]
+        3: Semidiferencia (L - R) / 2
+    """
+    info = leer_cabecera_y_datos(ficEste)
+    if info['num_channels'] != 2:
+        raise ValueError(f"El archivo '{ficEste}' no es una señal estéreo.")
+    if info['bits_per_sample'] != 16:
+        raise ValueError("Resolución no soportada. Se requiere audio estéreo de 16 bits.")
+        
+    num_muestras = len(info['data']) // 2
+    muestras = struct.unpack(f'<{num_muestras}h', info['data'])
+    
+    # Separar canales usando técnicas de rebanado (slicing)
+    L = muestras[0::2]
+    R = muestras[1::2]
+    
+    if canal == 0:
+        mono_muestras = L
+    elif canal == 1:
+        mono_muestras = R
+    elif canal == 2:
+        mono_muestras = [(l + r) // 2 for l, r in zip(L, R)]
+    elif canal == 3:
+        mono_muestras = [(l - r) // 2 for l, r in zip(L, R)]
+    else:
+        raise ValueError("El parámetro canal debe ser un valor entero entre 0 y 3.")
+        
+    datos_mono = struct.pack(f'<{len(mono_muestras)}h', *mono_muestras)
+    escribir_fichero_wave(ficMono, 1, info['sample_rate'], 16, datos_mono)
 ##### Código de `mono2estereo()`
 
+
+def mono2estereo(ficIzq, ficDer, ficEste):
+    """
+    Lee dos archivos monofónicos ('ficIzq' y 'ficDer') de 16 bits y genera
+    un archivo estéreo combinado 'ficEste'.
+    """
+    info_izq = leer_cabecera_y_datos(ficIzq)
+    info_der = leer_cabecera_y_datos(ficDer)
+    
+    if info_izq['num_channels'] != 1 or info_der['num_channels'] != 1:
+        raise ValueError("Ambas señales de origen deben ser monofónicas.")
+    if info_izq['bits_per_sample'] != 16 or info_der['bits_per_sample'] != 16:
+        raise ValueError("Ambos ficheros deben poseer una codificación de 16 bits.")
+    if info_izq['sample_rate'] != info_der['sample_rate']:
+        raise ValueError("Las frecuencias de muestreo de los archivos no coinciden.")
+        
+    num_m_izq = len(info_izq['data']) // 2
+    num_m_der = len(info_der['data']) // 2
+    if num_m_izq != num_m_der:
+        raise ValueError("La duración de ambos canales monoaurales debe ser idéntica.")
+        
+    izq = struct.unpack(f'<{num_m_izq}h', info_izq['data'])
+    der = struct.unpack(f'<{num_m_der}h', info_der['data'])
+    
+    # Entrelazar los canales utilizando una comprensión de lista anidada (sin bucles)
+    muestras_estereo = [muestra for par in zip(izq, der) for muestra in par]
+    datos_estereo = struct.pack(f'<{len(muestras_estereo)}h', *muestras_estereo)
+    
+    escribir_fichero_wave(ficEste, 2, info_izq['sample_rate'], 16, datos_estereo)
+
 ##### Código de `codEstereo()`
+def codEstereo(ficEste, ficCod):
+    """
+    Codifica un fichero estéreo de 16 bits en una señal monofónica de 32 bits.
+    Los 16 bits más significativos almacenan la semisuma de canales, mientras que
+    los 16 bits menos significativos contienen la semidiferencia.
+    """
+    info = leer_cabecera_y_datos(ficEste)
+    if info['num_channels'] != 2:
+        raise ValueError("La señal de entrada debe ser estéreo.")
+    if info['bits_per_sample'] != 16:
+        raise ValueError("La señal estéreo de entrada debe ser de 16 bits.")
+        
+    num_muestras = len(info['data']) // 2
+    muestras = struct.unpack(f'<{num_muestras}h', info['data'])
+    
+    L = muestras[0::2]
+    R = muestras[1::2]
+    
+    # Empaquetado binario mediante desplazamiento de bits y máscaras lógicas
+    muestras_32 = [
+        (((l + r) // 2) << 16) | (((l - r) // 2) & 0xFFFF)
+        for l, r in zip(L, R)
+    ]
+    
+    datos_32 = struct.pack(f'<{len(muestras_32)}i', *muestras_32)
+    escribir_fichero_wave(ficCod, 1, info['sample_rate'], 32, datos_32)
 
 ##### Código de `decEstereo()`
 
+def decEstereo(ficCod, ficEste):
+    """
+    Decodifica una señal monofónica de 32 bits y reconstruye los canales
+    izquierdo y derecho independientes en un archivo estéreo de 16 bits.
+    """
+    info = leer_cabecera_y_datos(ficCod)
+    if info['num_channels'] != 1:
+        raise ValueError("El archivo codificado de entrada debe ser monofónico.")
+    if info['bits_per_sample'] != 32:
+        raise ValueError("El archivo codificado debe poseer un tamaño de muestra de 32 bits.")
+        
+    num_muestras = len(info['data']) // 4
+    muestras_32 = struct.unpack(f'<{num_muestras}i', info['data'])
+    
 #### Subida del resultado al repositorio GitHub y *pull-request*
 
 La entrega se formalizará mediante *pull request* al repositorio de la tarea.
